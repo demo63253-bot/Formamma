@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Private Space</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        /* This fix prevents the "scrolling body" bug on mobile */
+        :root { --app-height: 100%; }
+        html, body { 
+            height: 100vh; height: 100dvh; 
+            margin: 0; padding: 0; overflow: hidden; 
+            background: #0f172a; position: fixed; width: 100%;
+        }
+        .tg-bubble { animation: pop 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.2) forwards; }
+        @keyframes pop { from { opacity: 0; transform: scale(0.9) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+        #box::-webkit-scrollbar { width: 0px; }
+        .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+    </style>
+</head>
+<body class="flex flex-col text-white">
+
+    <div id="gate" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950 p-6">
+        <div class="bg-slate-900 border border-white/10 p-8 rounded-[2.5rem] w-full max-w-sm text-center shadow-2xl">
+            <div class="text-4xl mb-6">🔒</div>
+            <h2 class="text-xl font-bold mb-6">Secret Access</h2>
+            <input id="pass" type="number" pattern="\d*;" inputmode="numeric" placeholder="Enter Code" class="w-full bg-white/5 border border-white/20 rounded-2xl px-4 py-4 text-center mb-4 outline-none focus:border-blue-500 transition-all text-xl">
+            <button onclick="checkPass()" class="w-full bg-blue-600 py-4 rounded-2xl font-bold active:scale-95 transition-all">Unlock Chat</button>
+        </div>
+    </div>
+
+    <div id="wait-screen" class="fixed inset-0 z-40 hidden flex items-center justify-center bg-slate-950/90 backdrop-blur-md">
+        <div class="text-center">
+            <div class="inline-block animate-spin rounded-full h-10 w-10 border-t-2 border-blue-500 mb-4"></div>
+            <p id="presence-count" class="text-slate-400 font-medium italic">Syncing devices... (1/2)</p>
+        </div>
+    </div>
+
+    <header class="h-16 flex items-center px-4 border-b border-white/5 bg-slate-900/50 backdrop-blur-lg pt-[env(safe-area-inset-top)]">
+        <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-600 flex-shrink-0"></div>
+        <div class="ml-3 flex-1 overflow-hidden">
+            <h1 class="font-bold text-sm truncate">Secure Connection</h1>
+            <p id="typing-ui" class="text-[10px] text-blue-400 opacity-0 transition-opacity">typing...</p>
+        </div>
+    </header>
+
+    <div id="box" class="flex-1 overflow-y-auto p-4 space-y-3 flex flex-col bg-[url('https://i.pinimg.com/originals/85/6e/0e/856e0e4708307d4b068213f59e66399c.jpg')] bg-fixed bg-center">
+        </div>
+
+    <footer class="bg-slate-900/80 backdrop-blur-xl border-t border-white/5 p-3 safe-bottom">
+        <div class="flex items-center gap-2 max-w-4xl mx-auto">
+            <input id="in" oninput="sendTyping()" type="text" placeholder="Message" class="flex-1 bg-white/10 rounded-full px-5 py-3 outline-none focus:bg-white/15 transition-all text-[16px]">
+            <button onclick="send()" class="bg-blue-600 w-12 h-12 rounded-full flex items-center justify-center active:scale-90 transition-all flex-shrink-0">
+                <svg class="w-5 h-5 fill-white rotate-90" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            </button>
+        </div>
+    </footer>
+
+    <script>
+        const socket = io();
+        const ROOM = "room_01";
+        const SECRET = "7777"; // CHANGE THIS
+        let myId = Math.random().toString(36).substring(7);
+
+        function checkPass() {
+            if(document.getElementById('pass').value === SECRET) {
+                document.getElementById('gate').style.display = 'none';
+                socket.emit('join', ROOM);
+            }
+        }
+
+        socket.on('presence', (count) => {
+            const waiter = document.getElementById('wait-screen');
+            if(count < 2) {
+                waiter.style.display = 'flex';
+                document.getElementById('presence-count').innerText = `Syncing devices... (${count}/2)`;
+            } else {
+                waiter.style.display = 'none';
+                socket.emit('read', ROOM);
+            }
+        });
+
+        function send() {
+            const text = document.getElementById('in').value;
+            if(!text) return;
+            const data = { room: ROOM, text, id: myId };
+            append(data, true);
+            socket.emit('msg', data);
+            document.getElementById('in').value = '';
+            socket.emit('typing', {room: ROOM, isTyping: false});
+        }
+
+        function append(data, mine) {
+            const div = document.createElement('div');
+            div.className = `tg-bubble max-w-[85%] p-3 rounded-2xl shadow-md ${mine ? 'self-end bg-blue-600 rounded-tr-none' : 'self-start bg-slate-800 rounded-tl-none'}`;
+            
+            const ticks = mine ? `<span class="tick ml-2 text-[9px] opacity-70">✓</span>` : '';
+            div.innerHTML = `<span class="text-[15px] leading-tight">${data.text}</span>${ticks}`;
+            
+            document.getElementById('box').appendChild(div);
+            document.getElementById('box').scrollTop = document.getElementById('box').scrollHeight;
+            if(!mine) socket.emit('read', ROOM);
+        }
+
+        socket.on('msg', (data) => append(data, false));
+        socket.on('read-update', () => {
+            document.querySelectorAll('.tick').forEach(t => t.innerText = '✓✓');
+        });
+
+        let typingTimeout;
+        function sendTyping() {
+            socket.emit('typing', {room: ROOM, isTyping: true});
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => socket.emit('typing', {room: ROOM, isTyping: false}), 2000);
+        }
+
+        socket.on('typing', (isTyping) => {
+            document.getElementById('typing-ui').style.opacity = isTyping ? '1' : '0';
+        });
+    </script>
+</body>
+</html>
