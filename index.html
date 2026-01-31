@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
+    <title>Private Space</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+        body { font-family: 'Inter', sans-serif; background: #0f172a; color: white; overflow: hidden; }
+        .tg-bubble { animation: pop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        @keyframes pop { from { opacity: 0; transform: scale(0.8) translateY(20px); } to { opacity: 1; transform: scale(1) translateY(0); } }
+        .glass { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(10px); }
+    </style>
+</head>
+<body class="h-screen flex flex-col">
+
+    <div id="gate" class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950">
+        <div class="glass p-8 rounded-[2rem] border border-white/10 w-80 text-center">
+            <div class="w-16 h-16 bg-blue-500 rounded-2xl mx-auto mb-6 flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">🔒</div>
+            <h2 class="text-xl font-bold mb-4">Secret Access</h2>
+            <input id="pass" type="password" placeholder="Code" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-center mb-4 outline-none focus:border-blue-500 transition-all">
+            <button onclick="checkPass()" class="w-full bg-blue-600 py-3 rounded-xl font-bold hover:bg-blue-500 active:scale-95 transition-all">Enter Space</button>
+        </div>
+    </div>
+
+    <div id="wait-screen" class="fixed inset-0 z-40 hidden flex items-center justify-center bg-slate-900">
+        <div class="text-center">
+            <div class="inline-block animate-spin rounded-full h-8 w-8 border-t-2 border-blue-500 mb-4"></div>
+            <p id="presence-count" class="text-lg font-medium text-slate-400">Waiting for partner... (1/2)</p>
+        </div>
+    </div>
+
+    <header class="p-4 border-b border-white/5 flex items-center gap-4 glass">
+        <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500"></div>
+        <div class="flex-1">
+            <h1 class="font-bold">Private Chat</h1>
+            <p id="typing-ui" class="text-xs text-blue-400 opacity-0 transition-opacity">typing...</p>
+        </div>
+        <div class="text-xs bg-green-500/20 text-green-400 px-3 py-1 rounded-full border border-green-500/20">Secure</div>
+    </header>
+
+    <div id="box" class="flex-1 overflow-y-auto p-4 space-y-3 flex flex-col"></div>
+
+    <footer class="p-4 glass border-t border-white/5">
+        <div class="flex gap-2 items-center">
+            <input id="in" oninput="sendTyping()" type="text" placeholder="Message" class="flex-1 bg-white/5 rounded-2xl px-5 py-3 outline-none focus:bg-white/10 transition-all">
+            <button onclick="send()" class="bg-blue-600 p-3 rounded-2xl active:scale-90 transition-all text-xl">🚀</button>
+        </div>
+    </footer>
+
+    <script>
+        const socket = io();
+        const ROOM = "room_01";
+        const SECRET = "7777"; // CHANGE YOUR PASS HERE
+        let myId = Math.random().toString(36).substring(7);
+
+        function checkPass() {
+            if(document.getElementById('pass').value === SECRET) {
+                document.getElementById('gate').style.display = 'none';
+                socket.emit('join', ROOM);
+            }
+        }
+
+        socket.on('presence', (count) => {
+            const waiter = document.getElementById('wait-screen');
+            const countText = document.getElementById('presence-count');
+            if(count < 2) {
+                waiter.style.display = 'flex';
+                countText.innerText = `Waiting for partner... (${count}/2)`;
+            } else {
+                waiter.style.display = 'none';
+                socket.emit('read', ROOM); // Mark old messages as read when second enters
+            }
+        });
+
+        function send() {
+            const text = document.getElementById('in').value;
+            if(!text) return;
+            const data = { room: ROOM, text, id: myId, read: false };
+            append(data, true);
+            socket.emit('msg', data);
+            document.getElementById('in').value = '';
+            socket.emit('typing', {room: ROOM, isTyping: false});
+        }
+
+        function append(data, mine) {
+            const div = document.createElement('div');
+            div.className = `tg-bubble max-w-[80%] p-3 rounded-2xl shadow-xl flex flex-col ${mine ? 'self-end bg-blue-600 rounded-tr-none' : 'self-start bg-white/10 rounded-tl-none text-white'}`;
+            
+            const tick = mine ? `<span class="tick text-[10px] self-end mt-1 opacity-60">✓</span>` : '';
+            div.innerHTML = `<span>${data.text}</span>${tick}`;
+            
+            document.getElementById('box').appendChild(div);
+            document.getElementById('box').scrollTop = document.getElementById('box').scrollHeight;
+            if(!mine) socket.emit('read', ROOM);
+        }
+
+        // Real-time Listeners
+        socket.on('msg', (data) => append(data, false));
+        
+        socket.on('read-update', () => {
+            document.querySelectorAll('.tick').forEach(t => t.innerText = '✓✓');
+        });
+
+        let typingTimeout;
+        function sendTyping() {
+            socket.emit('typing', {room: ROOM, isTyping: true});
+            clearTimeout(typingTimeout);
+            typingTimeout = setTimeout(() => {
+                socket.emit('typing', {room: ROOM, isTyping: false});
+            }, 2000);
+        }
+
+        socket.on('typing', (isTyping) => {
+            document.getElementById('typing-ui').style.opacity = isTyping ? '1' : '0';
+        });
+    </script>
+</body>
+</html>
