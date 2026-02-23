@@ -6,8 +6,8 @@
     <title>Private Space</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="/socket.io/socket.io.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        /* This fix prevents the "scrolling body" bug on mobile */
         :root { --app-height: 100%; }
         html, body { 
             height: 100vh; height: 100dvh; 
@@ -18,6 +18,9 @@
         @keyframes pop { from { opacity: 0; transform: scale(0.9) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
         #box::-webkit-scrollbar { width: 0px; }
         .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+        
+        /* Signal Bar Animation */
+        #signal-bar-fill { transition: width 0.5s ease, background 0.5s ease; }
     </style>
 </head>
 <body class="flex flex-col text-white">
@@ -26,7 +29,7 @@
         <div class="bg-slate-900 border border-white/10 p-8 rounded-[2.5rem] w-full max-w-sm text-center shadow-2xl">
             <div class="text-4xl mb-6">🔒</div>
             <h2 class="text-xl font-bold mb-6">Secret Access</h2>
-            <input id="pass" type="number" pattern="\d*;" inputmode="numeric" placeholder="Enter Code" class="w-full bg-white/5 border border-white/20 rounded-2xl px-4 py-4 text-center mb-4 outline-none focus:border-blue-500 transition-all text-xl">
+            <input id="pass" type="number" pattern="\d*" inputmode="numeric" placeholder="Enter Code" class="w-full bg-white/5 border border-white/20 rounded-2xl px-4 py-4 text-center mb-4 outline-none focus:border-blue-500 transition-all text-xl">
             <button onclick="checkPass()" class="w-full bg-blue-600 py-4 rounded-2xl font-bold active:scale-95 transition-all">Unlock Chat</button>
         </div>
     </div>
@@ -38,16 +41,30 @@
         </div>
     </div>
 
-    <header class="h-16 flex items-center px-4 border-b border-white/5 bg-slate-900/50 backdrop-blur-lg pt-[env(safe-area-inset-top)]">
+    <header class="h-20 flex items-center px-4 border-b border-white/5 bg-slate-900/50 backdrop-blur-lg pt-[env(safe-area-inset-top)]">
         <div class="w-10 h-10 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-600 flex-shrink-0"></div>
         <div class="ml-3 flex-1 overflow-hidden">
             <h1 class="font-bold text-sm truncate">Secure Connection</h1>
+            <div id="signal-ui" class="hidden flex items-center gap-1 mt-1">
+                <div class="w-12 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                    <div id="signal-bar-fill" class="w-0 h-full bg-green-500"></div>
+                </div>
+                <span id="signal-text" class="text-[8px] text-slate-400 uppercase tracking-widest">Stable</span>
+            </div>
             <p id="typing-ui" class="text-[10px] text-blue-400 opacity-0 transition-opacity">typing...</p>
+        </div>
+        
+        <div class="flex gap-2">
+            <button id="call-btn" onclick="startCall()" class="bg-green-600/20 text-green-400 p-3 rounded-full active:scale-90 transition-all">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/></svg>
+            </button>
+            <button id="hangup-btn" onclick="endCall()" class="hidden bg-red-600 p-3 rounded-full active:scale-90 transition-all">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
         </div>
     </header>
 
-    <div id="box" class="flex-1 overflow-y-auto p-4 space-y-3 flex flex-col bg-[url('https://i.pinimg.com/originals/85/6e/0e/856e0e4708307d4b068213f59e66399c.jpg')] bg-fixed bg-center">
-        </div>
+    <div id="box" class="flex-1 overflow-y-auto p-4 space-y-3 flex flex-col bg-slate-950 bg-fixed bg-center"></div>
 
     <footer class="bg-slate-900/80 backdrop-blur-xl border-t border-white/5 p-3 safe-bottom">
         <div class="flex items-center gap-2 max-w-4xl mx-auto">
@@ -58,11 +75,21 @@
         </div>
     </footer>
 
+    <audio id="remote-audio" autoplay></audio>
+
     <script>
         const socket = io();
         const ROOM = "room_01";
-        const SECRET = "7777"; // CHANGE THIS
+        const SECRET = "7777"; 
         let myId = Math.random().toString(36).substring(7);
+        
+        // --- PEER JS SETUP ---
+        const peer = new Peer(myId, {
+            config: {'iceServers': [{ url: 'stun:stun.l.google.com:19302' }]}
+        });
+
+        let currentCall = null;
+        let statsInterval;
 
         function checkPass() {
             if(document.getElementById('pass').value === SECRET) {
@@ -71,6 +98,81 @@
             }
         }
 
+        // --- CALLING LOGIC ---
+        
+        // Bandwidth Hack: Forced 16kbps SILK mode
+        function optimizeAudio(sdp) {
+            return sdp.replace(/a=fmtp:111/, "a=fmtp:111 maxaveragebitrate=16000;useinbandfec=1;usedtx=1");
+        }
+
+        async function startCall() {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            // Alert the other user via socket that we are calling
+            socket.emit('call-init', { room: ROOM, peerId: myId });
+            document.getElementById('call-btn').classList.add('animate-pulse');
+        }
+
+        // Handle receiving a call notice
+        socket.on('incoming-call', async (callerId) => {
+            if(confirm("Opponent is calling... Answer?")) {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const call = peer.call(callerId, stream);
+                handleCall(call);
+            }
+        });
+
+        // Handle being called (PeerJS side)
+        peer.on('call', async (call) => {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            call.answer(stream);
+            handleCall(call);
+        });
+
+        function handleCall(call) {
+            currentCall = call;
+            document.getElementById('call-btn').classList.add('hidden');
+            document.getElementById('hangup-btn').classList.remove('hidden');
+            document.getElementById('signal-ui').classList.remove('hidden');
+
+            call.on('stream', (remoteStream) => {
+                document.getElementById('remote-audio').srcObject = remoteStream;
+                monitorSignal(call.peerConnection);
+            });
+            
+            call.on('close', () => endCall());
+        }
+
+        function endCall() {
+            if(currentCall) currentCall.close();
+            clearInterval(statsInterval);
+            location.reload(); 
+        }
+
+        function monitorSignal(pc) {
+            statsInterval = setInterval(async () => {
+                const stats = await pc.getStats();
+                stats.forEach(report => {
+                    if (report.type === 'remote-inbound-rtp') {
+                        const jitter = report.jitter * 1000;
+                        const fill = document.getElementById('signal-bar-fill');
+                        const txt = document.getElementById('signal-text');
+                        
+                        if (jitter > 150) {
+                            fill.style.width = '30%'; fill.className = 'h-full bg-red-500';
+                            txt.innerText = 'Weak';
+                        } else if (jitter > 70) {
+                            fill.style.width = '60%'; fill.className = 'h-full bg-yellow-500';
+                            txt.innerText = 'Fair';
+                        } else {
+                            fill.style.width = '100%'; fill.className = 'h-full bg-green-500';
+                            txt.innerText = 'Super';
+                        }
+                    }
+                });
+            }, 2000);
+        }
+
+        // --- EXISTING CHAT LOGIC ---
         socket.on('presence', (count) => {
             const waiter = document.getElementById('wait-screen');
             if(count < 2) {
@@ -95,10 +197,8 @@
         function append(data, mine) {
             const div = document.createElement('div');
             div.className = `tg-bubble max-w-[85%] p-3 rounded-2xl shadow-md ${mine ? 'self-end bg-blue-600 rounded-tr-none' : 'self-start bg-slate-800 rounded-tl-none'}`;
-            
             const ticks = mine ? `<span class="tick ml-2 text-[9px] opacity-70">✓</span>` : '';
             div.innerHTML = `<span class="text-[15px] leading-tight">${data.text}</span>${ticks}`;
-            
             document.getElementById('box').appendChild(div);
             document.getElementById('box').scrollTop = document.getElementById('box').scrollHeight;
             if(!mine) socket.emit('read', ROOM);
